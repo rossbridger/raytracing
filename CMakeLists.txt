@@ -24,6 +24,8 @@ add_executable(raytracing main.cpp
     perlin.h
     quad.h
     constant_medium.h
+    onb.h
+    pdf.h
 )
 
 include(GNUInstallDirs)
