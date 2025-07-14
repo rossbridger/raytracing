@@ -1,8 +1,13 @@
 #ifndef CAMERA_H
 #define CAMERA_H
 
+#include <mutex>
+#include <thread>
+#include "color.h"
 #include "hittable.h"
 #include "material.h"
+
+#define MAX_THREADS 16
 
 class camera {
   public:
@@ -18,24 +23,55 @@ class camera {
     vec3   vup      = vec3(0,1,0);     // Camera-relative "up" direction
     double defocus_angle = 0;  // Variation angle of rays through each pixel
     double focus_dist = 10;    // Distance from camera lookfrom point to plane of perfect focus
+    color*  image_pixels;
 
     void render(const hittable& world) {
         initialize();
 
-        std::cout << "P3\n" << image_width << ' ' << image_height << "\n255\n";
+        image_pixels = new color[image_height * image_width];
 
-        for (int j = 0; j < image_height; j++) {
-            std::clog << "\rScanlines remaining: " << (image_height - j) << ' ' << std::flush;
-            for (int i = 0; i < image_width; i++) {
-                color pixel_color(0,0,0);
-                for (int sample = 0; sample < samples_per_pixel; sample++) {
-                    ray r = get_ray(i, j);
-                    pixel_color += ray_color(r, max_depth, world);
+        std::thread worker_threads[MAX_THREADS];
+        std::mutex mtx; // Global mutex
+
+        int remaining_scanlines = image_height;
+        std::clog << "\rScanlines remaining: " << remaining_scanlines << ' ' << std::flush;
+        // Create MAX_THREADS worker threads.
+        for(int i = 0; i < MAX_THREADS; i++)
+        {
+            worker_threads[i] = std::move(std::thread([this, &world, &remaining_scanlines, &mtx] (int thread_index) {
+
+                for (int j = thread_index; j < image_height; j += MAX_THREADS)
+                {
+                    for (int i = 0; i < image_width; i++)
+                    {
+                        color pixel_color(0,0,0);
+                        for (int sample = 0; sample < samples_per_pixel; sample++) {
+                            ray r = get_ray(i, j);
+                            pixel_color += ray_color(r, max_depth, world);
+                            image_pixels[j * image_width + i] = pixel_color;
+                        }
+                    }
+                    int current_remaining_scanlines;
+                    mtx.lock();
+                    current_remaining_scanlines = --remaining_scanlines;
+                    mtx.unlock();
+                    std::clog << "\rScanlines remaining: " << current_remaining_scanlines << ' ' << std::flush;
                 }
-                write_color(std::cout, pixel_samples_scale * pixel_color);
-            }
+                return 0;
+            }, i));
         }
 
+        for(int i = 0; i<MAX_THREADS; i++)
+        {
+            worker_threads[i].join();
+        }
+
+        std::cout << "P3\n" << image_width << ' ' << image_height << "\n255\n";
+
+        for (int i = 0; i < image_height * image_width; i++) {
+            write_color(std::cout, pixel_samples_scale * image_pixels[i]);
+        }
+        delete[] image_pixels;
         std::clog << "\rDone.                 \n";
     }
 
